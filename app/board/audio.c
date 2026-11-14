@@ -3,12 +3,14 @@
 #include "fm1_gpio.h"
 #include "fm1_engine_control.h"
 #include "audio_output.h"
+#include "verbalizer/fm1_verbalizer.h"
 #include <string.h>
 
 #define DMA_ALIGNED __attribute__((aligned(32)))
 static int32_t receive[2][FM1_BLOCK_WORDS] DMA_ALIGNED;
 static int32_t transmit[2][FM1_BLOCK_WORDS] DMA_ALIGNED;
 static int32_t rendered[FM1_BLOCK_WORDS] DMA_ALIGNED;
+static int32_t verbalizer_pcm[FM1_BLOCK_WORDS] DMA_ALIGNED;
 static struct fm1_audio_stats statistics;
 static uint32_t block_ticks, previous_tick;
 static uint8_t initialized, previous_valid;
@@ -44,6 +46,9 @@ FM1_AUDIO_CODE __attribute__((interrupt(""))) void fm1_audio_irq(void)
         ++statistics.overruns;
         return;
     }
+    /* The Verbalizer plays beside the stock instrument; fm1_output_mix clips the sum. */
+    fm1_verbalizer_render(verbalizer_pcm, FM1_BLOCK_FRAMES);
+    for (unsigned i = 0; i < FM1_BLOCK_WORDS; ++i) rendered[i] += verbalizer_pcm[i];
     fm1_output_mix(rendered);
     uint32_t flags = fm1_audio_irq_save();
     if (fm1_audio_half_owned(half) &&
