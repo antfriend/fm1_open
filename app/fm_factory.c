@@ -6,7 +6,7 @@
  * program changes then read SRAM without decompression or heap allocation. */
 /* Verbalizer build: only the first FACTORY_KEPT voices are stored, to make
  * room in the program image; the other program numbers repeat them. */
-enum { FACTORY_KEPT = 16 };
+enum { FACTORY_KEPT = 6 };
 static uint8_t factory_raw[FACTORY_KEPT*128];
 static unsigned factory_ready;
 static FM1_DSP_CODE void factory_init(void)
