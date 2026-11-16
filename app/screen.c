@@ -3,6 +3,7 @@
 #include "fm_patch.h"
 #include "version.h"
 #include "fm1_engine_control.h"
+#include "verbalizer/fm1_verbalizer.h"
 #include "verbalizer/fm1_verbalizer_ui.h"
 #include <string.h>
 enum {
@@ -159,7 +160,7 @@ static uint32_t midi_seen[8], midi_until[8];
 static uint8_t midi_active[8];
 static unsigned track, cursor, selected_note = 60, drum, writing, page, fm_group, op;
 static unsigned music_page, subpage_return, project_return, rec_before_press, effects_page;
-static unsigned seq_page, arp_page, vb_page = 1;
+static unsigned seq_page, arp_page, vb_page = 1, vb_loaded, vb_save_down;
 static unsigned boot_active, boot_phase;
 static uint32_t boot_started;
 static const char *const seq_pages[] = {"1/8 BASIC", "2/8 STEP DETAILS", "3/8 RHYTHM/REC", "4/8 LOCKS", "5/8 SYNC / LOOP", "6/8 MIDI TRACK", "7/8 MIDI ROUTING", "8/8 TRACK ROLE"};
@@ -1334,23 +1335,6 @@ static __attribute__((noinline)) void edit_page_draw(unsigned visible)
         text(8, 231, "EDIT BACK  HOLD EDIT MORE", 1, DIM, BACK);
     }
 }
-static __attribute__((noinline, cold, minsize)) void boot_draw(void)
-{
-    if (cache->title_cache != 0) {
-        cache->title_cache = 0;
-        text(86, 48, "FM1", 4, TEXT, BACK);
-        text(81, 98, "OFFICIAL OPEN", 1, ACCENT, BACK);
-        text((240 - 12 * (sizeof FM1_RELEASE_VERSION - 1)) / 2, 120,
-             FM1_RELEASE_VERSION, 2, TEXT, BACK);
-        text(102, 208, "M-VAVE", 1, DIM, BACK);
-    }
-    if (cache->middle_cache == boot_phase) return;
-    cache->middle_cache = boot_phase;
-    static const uint8_t height[8] = {8, 18, 30, 42, 42, 30, 18, 8};
-    for (unsigned i = 0; i < 8; ++i)
-        paint_fill(58 + 16 * i, 166 - height[i] / 2, 12, height[i],
-                   i < boot_phase ? colors[i] : PANEL);
-}
 /* The Verbalizer's page: SELECT turns its pages, ALGORITHM and PRESETS have
  * the two large fields and KNOB 1-4 the four at the foot, as on other pages. */
 static __attribute__((noinline, cold, minsize)) void verbalizer_draw(void)
@@ -1365,7 +1349,6 @@ static __attribute__((noinline, cold, minsize)) void verbalizer_draw(void)
         number(198, 8, (int)vb_page + 1, 1, 2, TEXT, BACK);
         text(210, 15, "/7", 1, DIM, BACK);
         text(8, 40, fm1_vb_page_name(vb_page), 3, TEXT, BACK);
-        text(6, 231, "SELECT PAGE  SCL OR HOME BACK", 1, DIM, BACK);
         memset(cache->row_cache, 0xff, sizeof cache->row_cache);
     }
     for (unsigned i = 0; i < FM1_VB_SLOTS; ++i) {
@@ -1382,6 +1365,12 @@ static __attribute__((noinline, cold, minsize)) void verbalizer_draw(void)
         text(14, y + 22, label, 2, TEXT, PANEL);
         text(110, y + 16, value, 3, colors[row ? 5 : 0], PANEL);
     }
+    const char *hint = notice ? notice : "SELECT PAGE  SAVE KEEP  SCL BACK";
+    uint32_t sig = signature(0, hint, (unsigned)strlen(hint));
+    if (cache->hint_cache == sig) return;
+    cache->hint_cache = sig;
+    paint_fill(6, 231, 228, 7, BACK);
+    text(6, 231, hint, 1, DIM, BACK);
 }
 static void draw_page_body(const struct fm1_ble_status *ble)
 {
@@ -1399,7 +1388,6 @@ static void draw_page_body(const struct fm1_ble_status *ble)
         if (visible == PROJECT || visible == PRESET_BROWSER)
             text(8, 8, visible == PROJECT ? "SAVE PROJECT" : "PRESETS", 2, ACCENT, BACK);
     }
-    if (visible == STARTUP) { boot_draw(); return; }
     const struct groove_view *views = frame_views, *v = &views[track];
     if (!paint_rendering) leds(v, visible);
     if (visible == VERBALIZER) { verbalizer_draw(); return; }
@@ -1836,8 +1824,8 @@ void groove_screen_init(void)
     fm1_controls_init();
     for (unsigned key = 0; key < 41; ++key) fm1_led_set(key, 0);
     fm1_screen_init();
-    boot_started = fm1_millis();
-    boot_active = 1;
+    /* The Verbalizer build has no room for the start-up animation, and is
+     * not the official firmware that it announces. */
     struct fm1_ble_status ble = {0};
     fm1_ble_get_status(&ble);
     draw(&ble);
@@ -2683,7 +2671,25 @@ void groove_screen_control(void)
         }
     }
     read_encoders(&controls, now, boundary);
+    if (!vb_loaded) {
+        /* Here, not at start-up, because flash belongs to this task. */
+        vb_loaded = 1;
+        if (!fm1_verbalizer_load(GROOVE_VERBALIZER_OFFSET)) {
+            unsigned mode = fm1_verbalizer_mode();
+            vb_page = mode ? mode * 3 - 2 : 0;
+        }
+    }
     if (page == VERBALIZER) {
+        /* SAVE keeps the Verbalizer's knobs instead of opening the project page. */
+        unsigned save = controls.buttons & BUTTON(SAVE);
+        controls.buttons &= ~BUTTON(SAVE);
+        if (save && !vb_save_down) {
+            int result = fm1_verbalizer_save(GROOVE_VERBALIZER_OFFSET);
+            notice = !result ? "VERBALIZER SAVED"
+                   : result == FM1_VERBALIZER_SECTOR_IN_USE ? "NO ROOM - SAMPLE BANK IS FULL" : "SAVE FAILED";
+            notice_until = now + 2000U;
+        }
+        vb_save_down = save;
         /* Every encoder belongs to the Verbalizer here; the keys still play. */
         if (controls.encoders[0]) {
             vb_page = (unsigned)clamp((int)vb_page + (controls.encoders[0] > 0 ? 1 : -1), 0, FM1_VB_PAGES - 1);

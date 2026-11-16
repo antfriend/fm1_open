@@ -329,9 +329,13 @@ enum { GROOVE_SAMPLE_OFFSET = 69632, GROOVE_SAMPLE_BYTES = 466944,
 /* Five final sectors hold the four DX7 banks and tuning/session preferences.
  * New sample transfers stop before them. Larger legacy banks stay readable;
  * writes to overlapping extension storage are rejected before erasing Flash. */
+/* Verbalizer build: the sector before the DX7 banks holds the Verbalizer's
+ * knobs, so new sample transfers stop one sector sooner. A bank already
+ * reaching into it stays readable, and the Verbalizer then declines to save. */
 enum { GROOVE_TUNING_OFFSET = GROOVE_FLASH_BYTES - 4096,
        GROOVE_LIBRARY_OFFSET = GROOVE_TUNING_OFFSET - 4 * 4096,
-       GROOVE_SAMPLE_LIMIT = GROOVE_LIBRARY_OFFSET - GROOVE_SAMPLE_OFFSET };
+       GROOVE_VERBALIZER_OFFSET = GROOVE_LIBRARY_OFFSET - 4096,
+       GROOVE_SAMPLE_LIMIT = GROOVE_VERBALIZER_OFFSET - GROOVE_SAMPLE_OFFSET };
 /* Finish any committed shared journal before starting a new transaction. */
 int groove_storage_prepare(void);
 void groove_samples_init(void);
